@@ -1,0 +1,43 @@
+# Binaries
+bin/
+app
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.test
+*.out
+coverage.out
+
+# Go workspace/cache (local)
+*.coverprofile
+
+# Build directories
+dist/
+build/
+
+# Dependency/vendor (uncomment if you vendor deps)
+# vendor/
+
+# Environment/config overrides
+.env
+.env.*
+!.env.example
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+
+# Generated protobuf (if generated locally into repo root paths)
+# Adjust path when you decide where generated files live.
+api/proto/**/*.pb.go
+api/proto/**/*_grpc.pb.go
