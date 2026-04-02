@@ -36,8 +36,3 @@ build/
 
 # Logs
 *.log
-
-# Generated protobuf (if generated locally into repo root paths)
-# Adjust path when you decide where generated files live.
-api/proto/**/*.pb.go
-api/proto/**/*_grpc.pb.go
