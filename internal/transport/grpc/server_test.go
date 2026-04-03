@@ -64,6 +64,23 @@ func TestGetRatesInvalidMethod(t *testing.T) {
 	}
 }
 
+func TestGetRatesNilRequest(t *testing.T) {
+	srv := NewServer(ratesGetterMock{})
+
+	_, err := srv.GetRates(context.Background(), nil)
+	if err == nil {
+		t.Fatalf("expected invalid argument error")
+	}
+
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected grpc status error")
+	}
+	if st.Code() != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %s", st.Code())
+	}
+}
+
 func TestGetRatesInvalidParams(t *testing.T) {
 	srv := NewServer(ratesGetterMock{})
 
@@ -102,6 +119,26 @@ func TestGetRatesServiceOutOfRange(t *testing.T) {
 	}
 	if st.Code() != codes.FailedPrecondition {
 		t.Fatalf("expected FailedPrecondition, got %s", st.Code())
+	}
+}
+
+func TestGetRatesServiceInternalError(t *testing.T) {
+	srv := NewServer(ratesGetterMock{err: errors.New("db connection failed")})
+
+	_, err := srv.GetRates(context.Background(), &ratesv1.GetRatesRequest{
+		Method: ratesv1.CalculationMethod_CALCULATION_METHOD_TOP_N,
+		N:      1,
+	})
+	if err == nil {
+		t.Fatalf("expected grpc error")
+	}
+
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected grpc status error")
+	}
+	if st.Code() != codes.Internal {
+		t.Fatalf("expected Internal, got %s", st.Code())
 	}
 }
 

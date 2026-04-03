@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/LaboroOptimus/grinex/internal/service"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -14,10 +15,14 @@ import (
 
 // RatesRepository saves calculated rates into PostgreSQL.
 type RatesRepository struct {
-	db *pgxpool.Pool
+	db dbExecutor
 }
 
 var repoTracer = otel.Tracer("postgres/repository")
+
+type dbExecutor interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+}
 
 func NewRatesRepository(db *pgxpool.Pool) *RatesRepository {
 	return &RatesRepository{db: db}
