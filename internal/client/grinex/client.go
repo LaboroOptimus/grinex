@@ -6,6 +6,10 @@ import (
 	"strconv"
 
 	"github.com/go-resty/resty/v2"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -41,6 +45,8 @@ type Client struct {
 	http *resty.Client
 }
 
+var clientTracer = otel.Tracer("grinex/client")
+
 // NewClient creates a Grinex HTTP client with default settings.
 func NewClient() *Client {
 	rc := resty.New().
@@ -57,6 +63,15 @@ func NewClientWithHTTP(httpClient *resty.Client) *Client {
 
 // FetchOrderBook returns asks and bids for symbol usdta7a5.
 func (c *Client) FetchOrderBook(ctx context.Context) (OrderBook, error) {
+	ctx, span := clientTracer.Start(ctx, "grinex.fetch_order_book", trace.WithSpanKind(trace.SpanKindClient))
+	defer span.End()
+
+	span.SetAttributes(
+		attribute.String("http.method", "GET"),
+		attribute.String("http.url", defaultBaseURL+depthPath),
+		attribute.String("grinex.symbol", defaultSymbol),
+	)
+
 	var payload depthResponse
 
 	resp, err := c.http.R().
@@ -65,22 +80,36 @@ func (c *Client) FetchOrderBook(ctx context.Context) (OrderBook, error) {
 		SetResult(&payload).
 		Get(depthPath)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "request failed")
 		return OrderBook{}, fmt.Errorf("grinex request failed: %w", err)
 	}
+	span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode()))
 
 	if resp.IsError() {
+		span.SetStatus(codes.Error, "grinex returned error status")
 		return OrderBook{}, fmt.Errorf("grinex returned status %d", resp.StatusCode())
 	}
 
 	asks, err := parseLevels(payload.Asks)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "parse asks failed")
 		return OrderBook{}, fmt.Errorf("parse asks: %w", err)
 	}
 
 	bids, err := parseLevels(payload.Bids)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "parse bids failed")
 		return OrderBook{}, fmt.Errorf("parse bids: %w", err)
 	}
+
+	span.SetAttributes(
+		attribute.Int("grinex.asks.count", len(asks)),
+		attribute.Int("grinex.bids.count", len(bids)),
+	)
+	span.SetStatus(codes.Ok, "ok")
 
 	return OrderBook{Asks: asks, Bids: bids}, nil
 }

@@ -2,44 +2,57 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
+	"time"
+
+	"os/signal"
 
 	"github.com/LaboroOptimus/grinex/internal/client/grinex"
 	"github.com/LaboroOptimus/grinex/internal/config"
 	"github.com/LaboroOptimus/grinex/internal/repository/postgres"
 	"github.com/LaboroOptimus/grinex/internal/service"
 	transportgrpc "github.com/LaboroOptimus/grinex/internal/transport/grpc"
+	otelsetup "github.com/LaboroOptimus/grinex/pkg/otel"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
 
 func main() {
-	ctx := context.Background()
+	baseCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
+
 	cfg, err := config.Load(os.Args[1:])
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
-	dbPool, err := pgxpool.New(ctx, cfg.DSN())
+	otelShutdown, err := otelsetup.Init(baseCtx, cfg.OTELService)
+	if err != nil {
+		log.Fatalf("failed to init open telemetry: %v", err)
+	}
+
+	dbPool, err := pgxpool.New(baseCtx, cfg.DSN())
 	if err != nil {
 		log.Fatalf("failed to create postgres pool: %v", err)
 	}
-	defer dbPool.Close()
 
-	if err = dbPool.Ping(ctx); err != nil {
+	if err = dbPool.Ping(baseCtx); err != nil {
 		log.Fatalf("failed to ping postgres: %v", err)
 	}
 
-	if err = runMigrations(ctx, dbPool, cfg.MigrationsDir); err != nil {
+	if err = runMigrations(baseCtx, dbPool, cfg.MigrationsDir); err != nil {
 		log.Fatalf("failed to apply migrations: %v", err)
 	}
 
@@ -53,9 +66,16 @@ func main() {
 	ratesService := service.NewRatesService(grinexClient, ratesRepo)
 	ratesServer := transportgrpc.NewServer(ratesService)
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+	)
 	transportgrpc.Register(grpcServer, ratesServer)
 	reflection.Register(grpcServer)
+
+	metricsServer := &http.Server{
+		Addr:    cfg.MetricsAddr,
+		Handler: promhttp.Handler(),
+	}
 
 	go func() {
 		log.Printf("gRPC server listening on %s", cfg.GRPCAddr)
@@ -64,12 +84,41 @@ func main() {
 		}
 	}()
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	<-stop
+	go func() {
+		log.Printf("metrics server listening on %s", cfg.MetricsAddr)
+		if serveErr := metricsServer.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			log.Printf("metrics server stopped with error: %v", serveErr)
+		}
+	}()
 
-	log.Printf("shutting down gRPC server")
-	grpcServer.GracefulStop()
+	<-baseCtx.Done()
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	log.Printf("shutting down application")
+	shutdownGRPC(grpcServer)
+	if err := metricsServer.Shutdown(shutdownCtx); err != nil {
+		log.Printf("failed to shutdown metrics server: %v", err)
+	}
+	dbPool.Close()
+	if err := otelShutdown(shutdownCtx); err != nil {
+		log.Printf("failed to shutdown open telemetry: %v", err)
+	}
+}
+
+func shutdownGRPC(server *grpc.Server) {
+	done := make(chan struct{})
+	go func() {
+		server.GracefulStop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		server.Stop()
+	}
 }
 
 func runMigrations(ctx context.Context, dbPool *pgxpool.Pool, dir string) error {

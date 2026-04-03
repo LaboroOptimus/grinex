@@ -9,6 +9,7 @@ import (
 
 const (
 	defaultGRPCAddr      = ":50051"
+	defaultMetricsAddr   = ":9090"
 	defaultDBHost        = "localhost"
 	defaultDBPort        = "5432"
 	defaultDBUser        = "postgres"
@@ -16,11 +17,13 @@ const (
 	defaultDBName        = "postgres"
 	defaultDBSSLMode     = "disable"
 	defaultMigrationsDir = "migrations"
+	defaultOTELService   = "grinex-service"
 )
 
 // Config stores application runtime configuration.
 type Config struct {
 	GRPCAddr      string
+	MetricsAddr   string
 	DatabaseURL   string
 	DBHost        string
 	DBPort        string
@@ -29,6 +32,7 @@ type Config struct {
 	DBName        string
 	DBSSLMode     string
 	MigrationsDir string
+	OTELService   string
 }
 
 // DSN returns PostgreSQL DSN. DatabaseURL has higher priority than split DB_* fields.
@@ -52,6 +56,7 @@ func (c Config) DSN() string {
 func Load(args []string) (Config, error) {
 	cfg := Config{
 		GRPCAddr:      envOrDefault("GRPC_ADDR", defaultGRPCAddr),
+		MetricsAddr:   envOrDefault("METRICS_ADDR", defaultMetricsAddr),
 		DatabaseURL:   envOrDefault("DATABASE_URL", ""),
 		DBHost:        envOrDefault("DB_HOST", defaultDBHost),
 		DBPort:        envOrDefault("DB_PORT", defaultDBPort),
@@ -60,12 +65,14 @@ func Load(args []string) (Config, error) {
 		DBName:        envOrDefault("DB_NAME", defaultDBName),
 		DBSSLMode:     envOrDefault("DB_SSLMODE", defaultDBSSLMode),
 		MigrationsDir: envOrDefault("MIGRATIONS_DIR", defaultMigrationsDir),
+		OTELService:   envOrDefault("OTEL_SERVICE_NAME", defaultOTELService),
 	}
 
 	fs := flag.NewFlagSet("app", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
 	fs.StringVar(&cfg.GRPCAddr, "grpc-addr", cfg.GRPCAddr, "gRPC listen address")
+	fs.StringVar(&cfg.MetricsAddr, "metrics-addr", cfg.MetricsAddr, "Prometheus metrics listen address")
 	fs.StringVar(&cfg.DatabaseURL, "db-url", cfg.DatabaseURL, "PostgreSQL connection URL")
 	fs.StringVar(&cfg.DBHost, "db-host", cfg.DBHost, "PostgreSQL host")
 	fs.StringVar(&cfg.DBPort, "db-port", cfg.DBPort, "PostgreSQL port")
@@ -74,6 +81,7 @@ func Load(args []string) (Config, error) {
 	fs.StringVar(&cfg.DBName, "db-name", cfg.DBName, "PostgreSQL database name")
 	fs.StringVar(&cfg.DBSSLMode, "db-sslmode", cfg.DBSSLMode, "PostgreSQL SSL mode")
 	fs.StringVar(&cfg.MigrationsDir, "migrations-dir", cfg.MigrationsDir, "Path to SQL migrations directory")
+	fs.StringVar(&cfg.OTELService, "otel-service-name", cfg.OTELService, "OpenTelemetry service name")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err

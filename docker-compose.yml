@@ -28,6 +28,7 @@ services:
       - .env
     environment:
       GRPC_ADDR: ${GRPC_ADDR:-:50051}
+      METRICS_ADDR: ${METRICS_ADDR:-:9090}
       DB_HOST: postgres
       DB_PORT: ${DB_PORT:-5432}
       DB_USER: ${DB_USER:-postgres}
@@ -35,8 +36,11 @@ services:
       DB_NAME: ${DB_NAME:-postgres}
       DB_SSLMODE: ${DB_SSLMODE:-disable}
       MIGRATIONS_DIR: /app/migrations
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-grinex-service}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     ports:
       - "50051:50051"
+      - "9090:9090"
 
 volumes:
   postgres_data:
