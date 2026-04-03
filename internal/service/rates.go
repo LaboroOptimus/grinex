@@ -23,6 +23,21 @@ type RateResult struct {
 	ReceivedAt time.Time
 }
 
+// RateSaver persists calculated rates.
+type RateSaver interface {
+	SaveRate(ctx context.Context, rate StoredRate) error
+}
+
+// StoredRate is a database record for a calculated rate.
+type StoredRate struct {
+	Ask             float64
+	Bid             float64
+	CalculationType CalculationMethod
+	N               uint32
+	M               uint32
+	Timestamp       time.Time
+}
+
 // OrderBookProvider abstracts Grinex client for testing.
 type OrderBookProvider interface {
 	FetchOrderBook(ctx context.Context) (grinex.OrderBook, error)
@@ -31,10 +46,20 @@ type OrderBookProvider interface {
 // RatesService calculates USDT rates from Grinex order-book.
 type RatesService struct {
 	provider OrderBookProvider
+	saver    RateSaver
 }
 
-func NewRatesService(provider OrderBookProvider) *RatesService {
-	return &RatesService{provider: provider}
+func NewRatesService(provider OrderBookProvider, saver RateSaver) *RatesService {
+	if saver == nil {
+		saver = nopSaver{}
+	}
+	return &RatesService{provider: provider, saver: saver}
+}
+
+type nopSaver struct{}
+
+func (nopSaver) SaveRate(context.Context, StoredRate) error {
+	return nil
 }
 
 // GetRates fetches order-book and calculates ask/bid with configured method.
@@ -58,7 +83,20 @@ func (s *RatesService) GetRates(ctx context.Context, method CalculationMethod, n
 		return RateResult{}, fmt.Errorf("calculate bid: %w", err)
 	}
 
-	return RateResult{Ask: ask, Bid: bid, ReceivedAt: time.Now().UTC()}, nil
+	result := RateResult{Ask: ask, Bid: bid, ReceivedAt: time.Now().UTC()}
+
+	if err := s.saver.SaveRate(ctx, StoredRate{
+		Ask:             result.Ask,
+		Bid:             result.Bid,
+		CalculationType: method,
+		N:               n,
+		M:               m,
+		Timestamp:       result.ReceivedAt,
+	}); err != nil {
+		return RateResult{}, fmt.Errorf("save rate: %w", err)
+	}
+
+	return result, nil
 }
 
 // ValidateCalculationInput validates N/M values for selected calculation method.
