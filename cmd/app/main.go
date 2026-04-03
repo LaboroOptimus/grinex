@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -21,44 +20,63 @@ import (
 	"github.com/LaboroOptimus/grinex/internal/repository/postgres"
 	"github.com/LaboroOptimus/grinex/internal/service"
 	transportgrpc "github.com/LaboroOptimus/grinex/internal/transport/grpc"
+	applogger "github.com/LaboroOptimus/grinex/pkg/logger"
 	otelsetup "github.com/LaboroOptimus/grinex/pkg/otel"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
 
 func main() {
+	logger, err := applogger.New()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to init logger: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() {
+		_ = logger.Sync()
+	}()
+
+	if err := run(logger); err != nil {
+		logger.Error("application failed", zap.Error(err))
+		os.Exit(1)
+	}
+}
+
+func run(logger *zap.Logger) error {
 	baseCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stopSignals()
 
 	cfg, err := config.Load(os.Args[1:])
 	if err != nil {
-		log.Fatalf("failed to load config: %v", err)
+		return fmt.Errorf("load config: %w", err)
 	}
 
 	otelShutdown, err := otelsetup.Init(baseCtx, cfg.OTELService)
 	if err != nil {
-		log.Fatalf("failed to init open telemetry: %v", err)
+		return fmt.Errorf("init open telemetry: %w", err)
 	}
 
 	dbPool, err := pgxpool.New(baseCtx, cfg.DSN())
 	if err != nil {
-		log.Fatalf("failed to create postgres pool: %v", err)
+		return fmt.Errorf("create postgres pool: %w", err)
 	}
+	defer dbPool.Close()
 
 	if err = dbPool.Ping(baseCtx); err != nil {
-		log.Fatalf("failed to ping postgres: %v", err)
+		return fmt.Errorf("ping postgres: %w", err)
 	}
 
-	if err = runMigrations(baseCtx, dbPool, cfg.MigrationsDir); err != nil {
-		log.Fatalf("failed to apply migrations: %v", err)
+	if err = runMigrations(baseCtx, dbPool, cfg.MigrationsDir, logger); err != nil {
+		return fmt.Errorf("apply migrations: %w", err)
 	}
 
 	listener, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
-		log.Fatalf("failed to listen on %s: %v", cfg.GRPCAddr, err)
+		return fmt.Errorf("listen on %s: %w", cfg.GRPCAddr, err)
 	}
 
 	grinexClient := grinex.NewClient()
@@ -78,16 +96,16 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("gRPC server listening on %s", cfg.GRPCAddr)
+		logger.Info("gRPC server listening", zap.String("addr", cfg.GRPCAddr))
 		if serveErr := grpcServer.Serve(listener); serveErr != nil {
-			log.Printf("gRPC server stopped with error: %v", serveErr)
+			logger.Error("gRPC server stopped with error", zap.Error(serveErr))
 		}
 	}()
 
 	go func() {
-		log.Printf("metrics server listening on %s", cfg.MetricsAddr)
+		logger.Info("metrics server listening", zap.String("addr", cfg.MetricsAddr))
 		if serveErr := metricsServer.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-			log.Printf("metrics server stopped with error: %v", serveErr)
+			logger.Error("metrics server stopped with error", zap.Error(serveErr))
 		}
 	}()
 
@@ -96,15 +114,16 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	log.Printf("shutting down application")
+	logger.Info("shutting down application")
 	shutdownGRPC(grpcServer)
 	if err := metricsServer.Shutdown(shutdownCtx); err != nil {
-		log.Printf("failed to shutdown metrics server: %v", err)
+		logger.Error("failed to shutdown metrics server", zap.Error(err))
 	}
-	dbPool.Close()
 	if err := otelShutdown(shutdownCtx); err != nil {
-		log.Printf("failed to shutdown open telemetry: %v", err)
+		logger.Error("failed to shutdown open telemetry", zap.Error(err))
 	}
+
+	return nil
 }
 
 func shutdownGRPC(server *grpc.Server) {
@@ -121,7 +140,7 @@ func shutdownGRPC(server *grpc.Server) {
 	}
 }
 
-func runMigrations(ctx context.Context, dbPool *pgxpool.Pool, dir string) error {
+func runMigrations(ctx context.Context, dbPool *pgxpool.Pool, dir string, logger *zap.Logger) error {
 	const createMigrationsTable = `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version TEXT PRIMARY KEY,
@@ -172,7 +191,7 @@ func runMigrations(ctx context.Context, dbPool *pgxpool.Pool, dir string) error 
 			return fmt.Errorf("track migration %q: %w", fileName, err)
 		}
 
-		log.Printf("applied migration %s", fileName)
+		logger.Info("applied migration", zap.String("file", fileName))
 	}
 
 	return nil
