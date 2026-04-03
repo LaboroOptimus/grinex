@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -14,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/LaboroOptimus/grinex/internal/client/grinex"
+	"github.com/LaboroOptimus/grinex/internal/config"
 	"github.com/LaboroOptimus/grinex/internal/repository/postgres"
 	"github.com/LaboroOptimus/grinex/internal/service"
 	transportgrpc "github.com/LaboroOptimus/grinex/internal/transport/grpc"
@@ -24,41 +24,12 @@ import (
 
 func main() {
 	ctx := context.Background()
-	defaultAddr := getenv("GRPC_ADDR", ":50051")
-	defaultDBURL := getenv("DATABASE_URL", "")
-	defaultDBHost := getenv("DB_HOST", "localhost")
-	defaultDBPort := getenv("DB_PORT", "5432")
-	defaultDBUser := getenv("DB_USER", "postgres")
-	defaultDBPassword := getenv("DB_PASSWORD", "postgres")
-	defaultDBName := getenv("DB_NAME", "postgres")
-	defaultDBSSLMode := getenv("DB_SSLMODE", "disable")
-	defaultMigrationsDir := getenv("MIGRATIONS_DIR", "migrations")
-
-	grpcAddr := flag.String("grpc-addr", defaultAddr, "gRPC listen address")
-	dbURL := flag.String("db-url", defaultDBURL, "PostgreSQL connection URL")
-	dbHost := flag.String("db-host", defaultDBHost, "PostgreSQL host")
-	dbPort := flag.String("db-port", defaultDBPort, "PostgreSQL port")
-	dbUser := flag.String("db-user", defaultDBUser, "PostgreSQL user")
-	dbPassword := flag.String("db-password", defaultDBPassword, "PostgreSQL password")
-	dbName := flag.String("db-name", defaultDBName, "PostgreSQL database name")
-	dbSSLMode := flag.String("db-sslmode", defaultDBSSLMode, "PostgreSQL SSL mode")
-	migrationsDir := flag.String("migrations-dir", defaultMigrationsDir, "Path to SQL migrations directory")
-	flag.Parse()
-
-	dsn := *dbURL
-	if dsn == "" {
-		dsn = fmt.Sprintf(
-			"postgres://%s:%s@%s:%s/%s?sslmode=%s",
-			*dbUser,
-			*dbPassword,
-			*dbHost,
-			*dbPort,
-			*dbName,
-			*dbSSLMode,
-		)
+	cfg, err := config.Load(os.Args[1:])
+	if err != nil {
+		log.Fatalf("failed to load config: %v", err)
 	}
 
-	dbPool, err := pgxpool.New(ctx, dsn)
+	dbPool, err := pgxpool.New(ctx, cfg.DSN())
 	if err != nil {
 		log.Fatalf("failed to create postgres pool: %v", err)
 	}
@@ -68,13 +39,13 @@ func main() {
 		log.Fatalf("failed to ping postgres: %v", err)
 	}
 
-	if err = runMigrations(ctx, dbPool, *migrationsDir); err != nil {
+	if err = runMigrations(ctx, dbPool, cfg.MigrationsDir); err != nil {
 		log.Fatalf("failed to apply migrations: %v", err)
 	}
 
-	listener, err := net.Listen("tcp", *grpcAddr)
+	listener, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
-		log.Fatalf("failed to listen on %s: %v", *grpcAddr, err)
+		log.Fatalf("failed to listen on %s: %v", cfg.GRPCAddr, err)
 	}
 
 	grinexClient := grinex.NewClient()
@@ -87,7 +58,7 @@ func main() {
 	reflection.Register(grpcServer)
 
 	go func() {
-		log.Printf("gRPC server listening on %s", *grpcAddr)
+		log.Printf("gRPC server listening on %s", cfg.GRPCAddr)
 		if serveErr := grpcServer.Serve(listener); serveErr != nil {
 			log.Printf("gRPC server stopped with error: %v", serveErr)
 		}
@@ -99,13 +70,6 @@ func main() {
 
 	log.Printf("shutting down gRPC server")
 	grpcServer.GracefulStop()
-}
-
-func getenv(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return fallback
 }
 
 func runMigrations(ctx context.Context, dbPool *pgxpool.Pool, dir string) error {

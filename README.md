@@ -62,3 +62,37 @@ $ docker-compose run --rm app ./app
 ```bash
 $ make test
 ```
+
+## Конфигурация (ENV и flags)
+
+Приоритет конфигурации:
+
+1. Флаги запуска (`flags`)
+2. Переменные окружения (`env`)
+3. Значения по умолчанию (`defaults`)
+
+| ENV | Flag | Default | Описание |
+|---|---|---|---|
+| `GRPC_ADDR` | `-grpc-addr` | `:50051` | Адрес gRPC сервера |
+| `DATABASE_URL` | `-db-url` | `""` | Полный DSN PostgreSQL. Если задан, имеет приоритет над `DB_*` |
+| `DB_HOST` | `-db-host` | `localhost` | Хост PostgreSQL |
+| `DB_PORT` | `-db-port` | `5432` | Порт PostgreSQL |
+| `DB_USER` | `-db-user` | `postgres` | Пользователь PostgreSQL |
+| `DB_PASSWORD` | `-db-password` | `postgres` | Пароль PostgreSQL |
+| `DB_NAME` | `-db-name` | `postgres` | Имя базы данных |
+| `DB_SSLMODE` | `-db-sslmode` | `disable` | Режим SSL для PostgreSQL |
+| `MIGRATIONS_DIR` | `-migrations-dir` | `migrations` | Путь до SQL-миграций |
+
+Пример запуска с флагами:
+
+```bash
+go run ./cmd/app \
+  -grpc-addr=:50051 \
+  -db-host=localhost \
+  -db-port=5432 \
+  -db-user=postgres \
+  -db-password=postgres \
+  -db-name=postgres \
+  -db-sslmode=disable \
+  -migrations-dir=migrations
+```
